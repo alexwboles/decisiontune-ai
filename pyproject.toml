@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decisiontune-ai"
+version = "0.1.0"
+description = "Free, self-hosted LoRA fine-tuning + eval rig for open decision models (Jev-API compatible)"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = []
+# Real-model extras (GPU machine only):
+#   pip install "decisiontune-ai[train]"  -> torch, transformers, peft, datasets, bitsandbytes, accelerate
+
+[project.optional-dependencies]
+train = ["torch", "transformers", "peft", "datasets", "bitsandbytes", "accelerate"]
+
+[project.scripts]
+decisiontune = "decisiontune.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["decisiontune*"]
