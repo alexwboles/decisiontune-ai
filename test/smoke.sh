@@ -9,10 +9,11 @@ ok()   { echo "ok   $1"; pass=$((pass+1)); }
 bad()  { echo "FAIL $1"; fail=$((fail+1)); }
 
 echo "== unit tests =="
-if python3 -m unittest discover -s tests 2>&1 | tail -1 | grep -q "^OK"; then
-  ok "unit tests (29)"
+python3 -m unittest discover -s tests > /tmp/dt-unit.log 2>&1
+if grep -q "^OK$" /tmp/dt-unit.log; then
+  ok "unit tests"
 else
-  bad "unit tests"; python3 -m unittest discover -s tests 2>&1 | tail -5
+  bad "unit tests"; tail -5 /tmp/dt-unit.log
 fi
 
 echo "== CLI pipeline =="
@@ -26,13 +27,18 @@ $CLI validate examples/lead-qualification.jsonl > /dev/null 2>&1 && ok "validate
 rm -rf /tmp/dt-e2e && mkdir -p /tmp/dt-e2e
 $CLI split examples/guardrail.jsonl --train-out /tmp/dt-e2e/train.jsonl \
   --eval-out /tmp/dt-e2e/eval.jsonl --eval-fraction 0.25 --seed 1 > /dev/null 2>&1 \
-  && [ "$(python3 -c "from decisiontune.dataset import load_jsonl; print(len(load_jsonl('/tmp/dt-e2e/eval.jsonl')))")" = "4" ] \
-  && ok "split 12/4" || bad "split"
+  && [ "$(python3 -c "from decisiontune.dataset import load_jsonl; print(len(load_jsonl('/tmp/dt-e2e/eval.jsonl')))")" = "10" ] \
+  && ok "split 30/10" || bad "split"
 
 $CLI train --data /tmp/dt-e2e/train.jsonl --model FakeOrg/fake-9b --dry-run \
   > /tmp/dt-plan.json 2>&1 \
-  && python3 -c "import json; p=json.load(open('/tmp/dt-plan.json')); assert p['train_rows']==24, p" \
-  && ok "train dry-run plan" || bad "train dry-run plan"
+  && python3 -c "
+import json
+from decisiontune.dataset import load_jsonl
+p = json.load(open('/tmp/dt-plan.json'))
+expected = sum(len(ex.questions) for ex in load_jsonl('/tmp/dt-e2e/train.jsonl'))
+assert p['train_rows'] == expected, (p['train_rows'], expected)
+" && ok "train dry-run plan" || bad "train dry-run plan"
 
 echo "== serve + eval (mock backends) =="
 $CLI serve --mock hash --name tuned-mock --port 18081 > /tmp/dt-tuned.log 2>&1 &

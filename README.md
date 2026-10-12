@@ -7,9 +7,11 @@ Cloudflare's Clef family (Clef / Clef-flash / Clef-omni) ships Apache-2.0 open w
 - **CLI** that takes labeled decision examples (JSONL: state + typed questions + correct answers) and LoRA-fine-tunes a decision model (default target: Clef-flash 9B; any HuggingFace causal-LM id works)
 - **Jev-API-compatible server** — `POST /v1/systemone` with `{state, questions}` → calibrated per-option probabilities. Drop-in for any Jev/Clef client (same endpoint shape SelfJev and Clef use)
 - **Eval rig** — tuned model vs a baseline (untuned base, chat LLM, hosted API) on a held-out split: accuracy, agreement rate, latency p50/p95, calibration (ECE), Brier score — printed as text, Markdown, and a static HTML report
-- **Dogfood datasets** — guardrail allow/block, ticket routing, lead qualification examples in `examples/`
+- **Dogfood datasets** — guardrail allow/block (40 examples, including 24 HQ agent-action cases), ticket routing, lead qualification examples in `examples/`
 
 Everything runs locally. No API keys, no usage bills.
+
+> **Merged 2026-10-12:** this repo absorbed `clef-finetuner` (same-day sibling build). Its 24 HQ guardrail examples, `--min-accuracy` CI gate, GPU training doc, and `media[]` multimodal schema reservation now live here. The old repo is archived and points here.
 
 ## Quickstart (5 minutes, no GPU)
 
@@ -48,6 +50,15 @@ One JSON object per line. Types mirror the Jev-API: `noul` (yes/no), `choice` (p
 
 `decisiontune validate` checks the schema, prints label distributions, and warns about labels that never appear in the data.
 
+Optional per-example `media`: a list of local image/audio/video paths, reserved for multimodal decision models (Clef-omni). Text-only training and serving ignore it; it is validated and round-tripped.
+
+```json
+{"state": "Screenshot review: checkout button visible.",
+ "media": ["shots/checkout.png"],
+ "questions": [{"id": "ok", "type": "noul", "question": "Is the checkout flow intact?"}],
+ "answers": {"ok": "yes"}}
+```
+
 ## Real-model training (GPU machine)
 
 You need one CUDA GPU (24 GB is enough for 4-bit QLoRA on the 9B model).
@@ -63,8 +74,8 @@ huggingface-cli login
 decisiontune train \
   --data train.jsonl \
   --model <clef-flash-hf-id> \
-  --out adapters/guardrail-v1 \
-  --epochs 3 --lora-r 16 --lr 2e-4
+  --preset clef-flash \
+  --out adapters/guardrail-v1
 
 # 4. Serve the tuned model (Jev-API compatible)
 decisiontune serve \
@@ -72,13 +83,15 @@ decisiontune serve \
   --adapter adapters/guardrail-v1 \
   --port 8080
 
-# 5. Compare against the untuned base model on held-out data
+# 5. Compare against the untuned base model on held-out data (exit 2 if below 0.7 accuracy)
 decisiontune serve --model <clef-flash-hf-id> --port 8081 &
 decisiontune eval --data eval.jsonl \
   --tuned http://127.0.0.1:8080 --tuned-name guardrail-v1 \
   --baseline http://127.0.0.1:8081 --baseline-name clef-flash-base \
-  --html-out report.html --open
+  --min-accuracy 0.7 --html-out report.html --open
 ```
+
+`--preset clef-flash|clef|clef-omni` fills in the known-good training recipe for that model family (explicit flags override the preset). See `docs/GPU_TRAINING.md` for the full GPU walkthrough.
 
 Replace `<clef-flash-hf-id>` with the HuggingFace repo id of Cloudflare's Clef-flash 9B weights (Apache-2.0; check the Cloudflare blog/HuggingFace for the current id). Any causal-LM checkpoint works — the trainer renders each (state, question) pair with `decisiontune/prompts.py` and trains the model to emit the correct option; the server scores every option as a completion and soft-maxes the log-probs.
 
@@ -133,7 +146,7 @@ Point any Jev-compatible client at it (e.g. SelfJev-style `BASE_URL` env config)
 ## Tests
 
 ```bash
-bash test/smoke.sh   # unit tests (29) + full CLI pipeline on mock backends (13 checks)
+bash test/smoke.sh   # unit tests (38) + full CLI pipeline on mock backends (13 checks)
 ```
 
 The suite is hermetic: mock backends, no model downloads, no GPU, stdlib only.

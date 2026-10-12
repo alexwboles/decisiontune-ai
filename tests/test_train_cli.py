@@ -19,8 +19,9 @@ class TestTrainPlan(unittest.TestCase):
     def test_build_rows(self):
         exs = load_jsonl(os.path.join(REPO, "examples", "guardrail.jsonl"))
         rows = build_rows(exs)
-        # 16 examples x 2 questions each
-        self.assertEqual(len(rows), 32)
+        # one row per question across all examples (16x2 original + 24x1 merged)
+        self.assertEqual(len(rows), sum(len(ex.questions) for ex in exs))
+        self.assertEqual(len(rows), 56)
         self.assertIn("prompt", rows[0])
         self.assertIn("completion", rows[0])
         self.assertIn(rows[0]["completion"], ("yes", "no"))
@@ -43,7 +44,7 @@ class TestTrainPlan(unittest.TestCase):
         self.assertEqual(rc, 0)
         p = json.loads(buf.getvalue())
         self.assertEqual(p["model_id"], "FakeOrg/fake-9b")
-        self.assertEqual(p["train_rows"], 32)
+        self.assertEqual(p["train_rows"], 56)  # 40 merged examples
 
     def test_real_train_fails_cleanly_without_torch(self):
         from decisiontune.train import train
@@ -71,8 +72,8 @@ class TestCli(unittest.TestCase):
                                "--train-out", tr, "--eval-out", ev,
                                "--eval-fraction", "0.25", "--seed", "1"])
             self.assertEqual(rc, 0)
-            self.assertEqual(len(load_jsonl(tr)) + len(load_jsonl(ev)), 16)
-            self.assertEqual(len(load_jsonl(ev)), 4)
+            self.assertEqual(len(load_jsonl(tr)) + len(load_jsonl(ev)), 40)
+            self.assertEqual(len(load_jsonl(ev)), 10)  # 25% of 40
 
     def test_validate_bad_file(self):
         fd, path = tempfile.mkstemp(suffix=".jsonl")

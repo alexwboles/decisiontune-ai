@@ -16,6 +16,21 @@ from .train import TrainConfig, plan, train
 
 DEFAULT_MODEL = "Clef-Flash-9B"  # HuggingFace id of Cloudflare's Clef-flash 9B
 
+# Training recipes per model family (merged from clef-finetuner's SPEC).
+# A preset fills in any train flag the user left at its default; explicit
+# flags always win. Model ids below are the family names — set --model to the
+# exact HuggingFace repo id (Cloudflare publishes them under Apache 2.0).
+PRESETS = {
+    "clef-flash": {"lora_r": 16, "lora_alpha": 32, "epochs": 3, "batch_size": 4,
+                   "notes": "9B: 4-bit QLoRA fits a 24GB GPU."},
+    "clef": {"lora_r": 16, "lora_alpha": 32, "epochs": 3, "batch_size": 2,
+             "notes": "27B: needs ~48GB+ VRAM; full precision is out of scope."},
+    "clef-omni": {"lora_r": 16, "lora_alpha": 32, "epochs": 3, "batch_size": 2,
+                  "notes": "30B multimodal: text-only tuning works today; "
+                           "media[] encoders follow the omni release helpers."},
+}
+_TRAIN_DEFAULTS = {"lora_r": 16, "lora_alpha": 32, "epochs": 3, "batch_size": 4}
+
 
 def cmd_validate(args) -> int:
     examples = load_jsonl(args.data)
@@ -43,6 +58,12 @@ def cmd_split(args) -> int:
 
 def cmd_train(args) -> int:
     examples = load_jsonl(args.data)
+    if args.preset:
+        p = PRESETS[args.preset]
+        for dest, default in _TRAIN_DEFAULTS.items():
+            if getattr(args, dest) == default:
+                setattr(args, dest, p[dest])
+        print(f"preset '{args.preset}': {p['notes']}")
     cfg = TrainConfig(
         model_id=args.model, out_dir=args.out, lora_r=args.lora_r,
         lora_alpha=args.lora_alpha, learning_rate=args.lr, epochs=args.epochs,
@@ -105,6 +126,11 @@ def cmd_eval(args) -> int:
         print(f"html report -> {args.html_out}")
         if args.open:
             webbrowser.open("file://" + os.path.abspath(args.html_out))
+    if args.min_accuracy is not None:
+        acc = report.tuned["accuracy"]
+        if acc < args.min_accuracy:
+            print(f"tuned accuracy {acc:.3f} below --min-accuracy {args.min_accuracy}")
+            return 2
     return 0
 
 
@@ -131,6 +157,8 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("train", help="LoRA fine-tune a decision model")
     t.add_argument("--data", required=True, help="training .jsonl")
     t.add_argument("--model", default=DEFAULT_MODEL, help="base HF model id")
+    t.add_argument("--preset", choices=sorted(PRESETS),
+                   help="training recipe for a model family (explicit flags override)")
     t.add_argument("--out", default="adapters/run1", help="adapter output dir")
     t.add_argument("--lora-r", type=int, default=16)
     t.add_argument("--lora-alpha", type=int, default=32)
@@ -165,6 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--tuned-key", default=None)
     e.add_argument("--baseline-key", default=None)
     e.add_argument("--timeout", type=float, default=60.0)
+    e.add_argument("--min-accuracy", type=float, default=None,
+                   help="exit 2 if tuned accuracy is below this (CI gate)")
     e.add_argument("--markdown-out", default=None)
     e.add_argument("--html-out", default=None)
     e.add_argument("--open", action="store_true")

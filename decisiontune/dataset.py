@@ -21,6 +21,11 @@ Question types (mirroring the Jev-API shape used by Jev, Clef, SelfJev):
   noul   -> P(yes); answer is "yes" or "no"
   choice -> pick one of `options`; answer is one of the options
   score  -> ordinal scale 1..levels; answer is an int in range
+
+Optional per-example `media`: a list of local image/audio/video paths, reserved
+for multimodal decision models (e.g. Cloudflare Clef-omni). Text-only training
+and serving ignore it; it is validated and round-tripped so datasets stay
+forward-compatible.
 """
 from __future__ import annotations
 
@@ -50,6 +55,7 @@ class Example:
     questions: List[Question]
     answers: Dict[str, Any]
     source: str = ""  # "file.jsonl:line" for error messages
+    media: List[str] = field(default_factory=list)  # optional media paths (Clef-omni)
 
 
 class DatasetError(ValueError):
@@ -128,7 +134,11 @@ def parse_example(raw: Any, where: str) -> Example:
     extra = set(answers) - set(ids)
     if extra:
         raise DatasetError(f"{where}: answers for unknown questions: {sorted(extra)}")
-    return Example(state=state, questions=questions, answers=answers, source=where)
+    media = raw.get("media", [])
+    if not isinstance(media, list) or not all(isinstance(m, str) for m in media):
+        raise DatasetError(f"{where}: 'media' must be a list of path strings")
+    return Example(state=state, questions=questions, answers=answers, source=where,
+                   media=media)
 
 
 def load_jsonl(path: str) -> List[Example]:
@@ -151,7 +161,7 @@ def load_jsonl(path: str) -> List[Example]:
 def write_jsonl(path: str, examples: List[Example]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for ex in examples:
-            f.write(json.dumps({
+            doc: Dict[str, Any] = {
                 "state": ex.state,
                 "questions": [
                     {k: v for k, v in {
@@ -162,7 +172,10 @@ def write_jsonl(path: str, examples: List[Example]) -> None:
                     for q in ex.questions
                 ],
                 "answers": ex.answers,
-            }, ensure_ascii=False) + "\n")
+            }
+            if ex.media:
+                doc["media"] = ex.media
+            f.write(json.dumps(doc, ensure_ascii=False) + "\n")
 
 
 def split(examples: List[Example], eval_fraction: float = 0.2,

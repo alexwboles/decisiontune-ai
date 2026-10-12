@@ -86,5 +86,75 @@ class TestEvaluate(unittest.TestCase):
         self.assertNotIn("border-radius", html)
 
 
+class TestMinAccuracyGate(unittest.TestCase):
+    """--min-accuracy: exit 2 when tuned accuracy falls below the bar (CI gate)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from decisiontune.dataset import write_jsonl
+        import tempfile
+        fd, cls.data = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        write_jsonl(cls.data, EXAMPLES)
+        # tuned mock: 50% accuracy on the alternating labels
+        cls.tuned = run_server(MockBackend(mode="first", first_prob=0.9, latency_ms=1),
+                               "tuned-mock", port=18094)
+        cls.base = run_server(MockBackend(mode="uniform", latency_ms=1),
+                              "base-mock", port=18095)
+        for s in (cls.tuned, cls.base):
+            threading.Thread(target=s.serve_forever, daemon=True).start()
+        time.sleep(0.5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tuned.shutdown()
+        cls.base.shutdown()
+        os.unlink(cls.data)
+
+    def _run_gate(self, min_accuracy):
+        import io
+        from contextlib import redirect_stdout
+        from decisiontune.cli import build_parser
+        args = build_parser().parse_args([
+            "eval", "--data", self.data,
+            "--tuned", "http://127.0.0.1:18094",
+            "--baseline", "http://127.0.0.1:18095",
+            "--min-accuracy", str(min_accuracy),
+        ])
+        with redirect_stdout(io.StringIO()):
+            return args.fn(args)
+
+    def test_gate_fails_below_bar(self):
+        self.assertEqual(self._run_gate(0.9), 2)
+
+    def test_gate_passes_above_bar(self):
+        self.assertEqual(self._run_gate(0.4), 0)
+
+    def test_preset_fills_train_recipe(self):
+        import io, json
+        from contextlib import redirect_stdout
+        from decisiontune.cli import build_parser, PRESETS
+        # preset applied to flags left at defaults…
+        args = build_parser().parse_args(
+            ["train", "--data", self.data, "--preset", "clef", "--dry-run"])
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(args.fn(args), 0)
+        # …but explicit flags win
+        args2 = build_parser().parse_args(
+            ["train", "--data", self.data, "--preset", "clef",
+             "--batch-size", "8", "--dry-run"])
+        buf2 = io.StringIO()
+        with redirect_stdout(buf2):
+            self.assertEqual(args2.fn(args2), 0)
+        out1 = buf.getvalue()
+        out2 = buf2.getvalue()
+        plan1 = json.loads(out1[out1.index("{"):])
+        plan2 = json.loads(out2[out2.index("{"):])
+        self.assertEqual(plan1["optimizer"]["batch_size"],
+                         PRESETS["clef"]["batch_size"])
+        self.assertEqual(plan2["optimizer"]["batch_size"], 8)
+
+
 if __name__ == "__main__":
     unittest.main()

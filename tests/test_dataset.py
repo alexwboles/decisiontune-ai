@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from decisiontune.dataset import (
     DatasetError, check_label_coverage, load_jsonl, parse_example, split, stats,
+    write_jsonl,
 )
 
 GOOD = {
@@ -93,6 +94,45 @@ class TestDataset(unittest.TestCase):
         warns = check_label_coverage(exs)
         self.assertTrue(any("technical" in w for w in warns))
         self.assertTrue(any("no" in w for w in warns))
+
+
+class TestMedia(unittest.TestCase):
+    """media[] — reserved for multimodal decision models (Clef-omni)."""
+
+    def test_media_defaults_empty(self):
+        ex = parse_example(dict(GOOD), "t:1")
+        self.assertEqual(ex.media, [])
+
+    def test_media_valid_list(self):
+        raw = dict(GOOD, media=["shots/a.png", "clips/b.mp4"])
+        ex = parse_example(raw, "t:1")
+        self.assertEqual(ex.media, ["shots/a.png", "clips/b.mp4"])
+
+    def test_media_must_be_list(self):
+        with self.assertRaises(DatasetError):
+            parse_example(dict(GOOD, media="shots/a.png"), "t:1")
+
+    def test_media_items_must_be_strings(self):
+        with self.assertRaises(DatasetError):
+            parse_example(dict(GOOD, media=["ok.png", 42]), "t:1")
+
+    def test_media_round_trip(self):
+        import tempfile, os
+        raw = dict(GOOD, media=["shots/a.png"])
+        ex = parse_example(raw, "t:1")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "m.jsonl")
+            write_jsonl(p, [ex])
+            back = load_jsonl(p)
+        self.assertEqual(back[0].media, ["shots/a.png"])
+
+    def test_merged_guardrail_examples(self):
+        import os
+        p = os.path.join(os.path.dirname(__file__), "..", "examples", "guardrail.jsonl")
+        exs = load_jsonl(p)
+        # 16 original + 24 merged from clef-finetuner's HQ guardrail set
+        self.assertEqual(len(exs), 40)
+        self.assertTrue(all(e.questions for e in exs))
 
 
 if __name__ == "__main__":
