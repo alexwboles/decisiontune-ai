@@ -6,7 +6,7 @@ Cloudflare's Clef family (Clef / Clef-flash / Clef-omni) ships Apache-2.0 open w
 
 - **CLI** that takes labeled decision examples (JSONL: state + typed questions + correct answers) and LoRA-fine-tunes a decision model (default target: Clef-flash 9B; any HuggingFace causal-LM id works)
 - **Jev-API-compatible server** — `POST /v1/systemone` with `{state, questions}` → calibrated per-option probabilities. Drop-in for any Jev/Clef client (same endpoint shape SelfJev and Clef use)
-- **Eval rig** — tuned model vs a baseline (untuned base, chat LLM, hosted API) on a held-out split: accuracy, agreement rate, latency p50/p95, calibration (ECE), Brier score — printed as text, Markdown, and a static HTML report
+- **Eval rig** — tuned model vs a baseline (untuned base, chat LLM, hosted API) on a held-out split: accuracy, agreement rate, latency p50/p95, calibration (ECE), Brier score, per-question fixed/regressed deltas, and a paired bootstrap 95% CI on the accuracy delta — printed as text, Markdown, and a static HTML report
 - **Dogfood datasets** — guardrail allow/block (40 examples, including 24 HQ agent-action cases), ticket routing, lead qualification examples in `examples/`
 
 Everything runs locally. No API keys, no usage bills.
@@ -98,7 +98,7 @@ Replace `<clef-flash-hf-id>` with the HuggingFace repo id of Cloudflare's Clef-f
 Practical notes:
 
 - 50–200 labeled examples per question is a reasonable start; `validate` tells you the label mix.
-- Keep a genuinely held-out eval split (`split --seed` is deterministic) — eval numbers only mean something on unseen data.
+- Keep a genuinely held-out eval split (`split --seed` is deterministic) — eval numbers only mean something on unseen data. `split` warns when an eval example near-duplicates a train example (eval leakage check).
 - Gate production traffic on confidence: the HTML report shows calibration (ECE). If ECE is high, collect more labels before trusting thresholds.
 - This is supervised fine-tuning (SFT/LoRA), the standard community recipe for adapting decision models (cf. JevBench's open LoRA entries). Cloudflare's own RL pipeline is proprietary; SFT gets you most of the way for classification-style decisions.
 

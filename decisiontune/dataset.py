@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -191,6 +192,40 @@ def split(examples: List[Example], eval_fraction: float = 0.2,
     train = [ex for i, ex in enumerate(examples) if i not in eval_idx]
     ev = [ex for i, ex in enumerate(examples) if i in eval_idx]
     return train, ev
+
+
+def _state_tokens(s: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", s.lower()))
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def find_overlap(train: List[Example], ev: List[Example],
+                 threshold: float = 0.8) -> List[Dict[str, Any]]:
+    """Near-duplicate state texts across a train/eval split (eval leakage check).
+
+    Returns [{eval, train, similarity}] for each eval example whose state has
+    token-set Jaccard similarity >= threshold with some train example —
+    those eval scores may be inflated by memorization, not learning.
+    """
+    train_toks = [(ex.source, _state_tokens(ex.state)) for ex in train]
+    out = []
+    for e in ev:
+        et = _state_tokens(e.state)
+        best_src, best_sim = "", 0.0
+        for src, tt in train_toks:
+            sim = _jaccard(et, tt)
+            if sim > best_sim:
+                best_sim, best_src = sim, src
+        if best_sim >= threshold:
+            out.append({"eval": e.source, "train": best_src,
+                        "similarity": round(best_sim, 3)})
+    out.sort(key=lambda d: -d["similarity"])
+    return out
 
 
 def stats(examples: List[Example]) -> Dict[str, Any]:

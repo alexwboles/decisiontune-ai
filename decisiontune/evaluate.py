@@ -14,6 +14,7 @@ server, a chat LLM wrapped as decisions, or a mock in tests.
 """
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -104,6 +105,37 @@ class EvalReport:
     agreement: float
     per_type: Dict[str, Dict]
     errors: List[str] = field(default_factory=list)
+    # per-question head-to-head: [{source, qid, qtype, truth, tuned_pred,
+    #   tuned_conf, tuned_correct, baseline_pred, baseline_conf,
+    #   baseline_correct, verdict}] where verdict is one of
+    #   fixed | regressed | still_correct | still_wrong
+    deltas: List[Dict] = field(default_factory=list)
+    delta_summary: Dict[str, int] = field(default_factory=dict)
+    # paired bootstrap 95% CI for (tuned accuracy - baseline accuracy)
+    delta_ci: Tuple[float, float] = (0.0, 0.0)
+
+
+def bootstrap_delta_ci(tuned_correct: List[bool], baseline_correct: List[bool],
+                       n_boot: int = 1000, seed: int = 1234) -> Tuple[float, float]:
+    """Paired bootstrap 95% CI for (tuned accuracy - baseline accuracy).
+
+    Resamples the paired per-question correctness flags with replacement;
+    deterministic for a given seed so CI gates are reproducible in CI.
+    """
+    n = len(tuned_correct)
+    if n == 0 or len(baseline_correct) != n:
+        return (0.0, 0.0)
+    rng = random.Random(seed)
+    diffs = []
+    for _ in range(n_boot):
+        idx = [rng.randrange(n) for _ in range(n)]
+        dt = sum(1 for i in idx if tuned_correct[i]) / n
+        db = sum(1 for i in idx if baseline_correct[i]) / n
+        diffs.append(dt - db)
+    diffs.sort()
+    lo = diffs[int(0.025 * n_boot)]
+    hi = diffs[min(int(0.975 * n_boot), n_boot - 1)]
+    return (lo, hi)
 
 
 def _endpoint_metrics(results: List[Tuple[Question, EndpointResult, str]]) -> Dict:
@@ -138,6 +170,9 @@ def run_eval(examples: List[Example], cfg: EvalConfig) -> EvalReport:
     agree = total = 0
     errors: List[str] = []
     n_questions = 0
+    deltas: List[Dict] = []
+    tuned_ok: List[bool] = []
+    base_ok: List[bool] = []
     for ex in examples:
         t_res, _ = query_endpoint(cfg.tuned_url, cfg.tuned_key, ex, cfg.timeout)
         b_res, _ = query_endpoint(cfg.baseline_url, cfg.baseline_key, ex, cfg.timeout)
@@ -156,15 +191,41 @@ def run_eval(examples: List[Example], cfg: EvalConfig) -> EvalReport:
             bucket["base"].append((q, br, truth))
             if not tr.error and not br.error and tr.probs and br.probs:
                 total += 1
+                tp, bp = _argmax(tr.probs), _argmax(br.probs)
+                tc, bc = (tp == truth), (bp == truth)
                 if _argmax(tr.probs) == _argmax(br.probs):
                     agree += 1
+                tuned_ok.append(tc)
+                base_ok.append(bc)
+                if tc and not bc:
+                    verdict = "fixed"
+                elif bc and not tc:
+                    verdict = "regressed"
+                elif tc:
+                    verdict = "still_correct"
+                else:
+                    verdict = "still_wrong"
+                deltas.append({
+                    "source": ex.source, "qid": q.id, "qtype": q.type,
+                    "truth": truth,
+                    "tuned_pred": tp, "tuned_conf": round(tr.probs.get(tp, 0.0), 4),
+                    "tuned_correct": tc,
+                    "baseline_pred": bp, "baseline_conf": round(br.probs.get(bp, 0.0), 4),
+                    "baseline_correct": bc,
+                    "verdict": verdict,
+                })
     per_type_metrics = {
         t: {"tuned": _endpoint_metrics(v["tuned"]), "baseline": _endpoint_metrics(v["base"])}
         for t, v in per_type.items()
     }
+    delta_summary = {"fixed": 0, "regressed": 0, "still_correct": 0, "still_wrong": 0}
+    for d in deltas:
+        delta_summary[d["verdict"]] += 1
     return EvalReport(
         n_examples=len(examples), n_questions=n_questions,
         tuned=_endpoint_metrics(tuned_rows), baseline=_endpoint_metrics(base_rows),
         agreement=agree / total if total else 0.0,
         per_type=per_type_metrics, errors=errors[:20],
+        deltas=deltas, delta_summary=delta_summary,
+        delta_ci=bootstrap_delta_ci(tuned_ok, base_ok),
     )

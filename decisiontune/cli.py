@@ -9,7 +9,7 @@ import threading
 import webbrowser
 
 from . import __version__
-from .dataset import check_label_coverage, load_jsonl, split, stats, write_jsonl
+from .dataset import check_label_coverage, find_overlap, load_jsonl, split, stats, write_jsonl
 from .evaluate import EvalConfig, run_eval
 from .report import to_html, to_markdown, to_text
 from .train import TrainConfig, plan, train
@@ -53,6 +53,12 @@ def cmd_split(args) -> int:
     write_jsonl(args.eval_out, eval_ex)
     print(f"train: {len(train_ex)} -> {args.train_out}")
     print(f"eval:  {len(eval_ex)} -> {args.eval_out}")
+    dup = find_overlap(train_ex, eval_ex)
+    if dup:
+        print(f"WARNING: {len(dup)} eval example(s) look like near-duplicates of "
+              f"train examples (similarity >= 0.8) — eval scores may be inflated:")
+        for d in dup[:5]:
+            print(f"  {d['eval']} ~ {d['train']} (similarity {d['similarity']})")
     return 0
 
 

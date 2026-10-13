@@ -85,6 +85,55 @@ class TestEvaluate(unittest.TestCase):
         self.assertIn("decisiontune", html)
         self.assertNotIn("border-radius", html)
 
+    def test_delta_classification(self):
+        cfg = EvalConfig(tuned_url="http://127.0.0.1:18092",
+                         baseline_url="http://127.0.0.1:18093")
+        rep = run_eval(EXAMPLES, cfg)
+        # tuned always picks "alpha": right on even i (truth alpha), wrong on odd.
+        # baseline uniform ties -> argmax picks "beta": right on odd, wrong on even.
+        self.assertEqual(len(rep.deltas), 10)
+        self.assertEqual(rep.delta_summary,
+                         {"fixed": 5, "regressed": 5,
+                          "still_correct": 0, "still_wrong": 0})
+        for i, d in enumerate(rep.deltas):
+            self.assertEqual(d["source"], f"t:{i}")
+            self.assertEqual(d["qid"], "q")
+            self.assertEqual(d["verdict"], "fixed" if i % 2 == 0 else "regressed")
+            self.assertEqual(d["tuned_correct"], i % 2 == 0)
+            self.assertEqual(d["baseline_correct"], i % 2 == 1)
+
+    def test_bootstrap_ci(self):
+        from decisiontune.evaluate import bootstrap_delta_ci
+        # tuned always right, baseline always wrong -> CI entirely positive
+        lo, hi = bootstrap_delta_ci([True] * 20, [False] * 20)
+        self.assertGreater(lo, 0.5)
+        self.assertLessEqual(hi, 1.0)
+        # identical correctness -> CI straddles zero
+        lo2, hi2 = bootstrap_delta_ci([True] * 10 + [False] * 10,
+                                      [True] * 10 + [False] * 10)
+        self.assertLessEqual(lo2, 0.0)
+        self.assertGreaterEqual(hi2, 0.0)
+        # deterministic for a fixed seed, zeros when empty
+        self.assertEqual(bootstrap_delta_ci([True] * 20, [False] * 20),
+                         bootstrap_delta_ci([True] * 20, [False] * 20))
+        self.assertEqual(bootstrap_delta_ci([], []), (0.0, 0.0))
+
+    def test_report_shows_deltas_and_ci(self):
+        cfg = EvalConfig(tuned_url="http://127.0.0.1:18092",
+                         baseline_url="http://127.0.0.1:18093")
+        rep = run_eval(EXAMPLES[:4], cfg)
+        text = to_text(rep, "tuned-mock", "base-mock")
+        self.assertIn("95% CI", text)
+        self.assertIn("fixed", text)
+        self.assertIn("regressed", text)
+        md = to_markdown(rep)
+        self.assertIn("Accuracy delta", md)
+        self.assertIn("regressions", md)
+        html = to_html(rep)
+        self.assertIn("What changed", html)
+        self.assertIn("Regressions", html)
+        self.assertNotIn("border-radius", html)
+
 
 class TestMinAccuracyGate(unittest.TestCase):
     """--min-accuracy: exit 2 when tuned accuracy falls below the bar (CI gate)."""

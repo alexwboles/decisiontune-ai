@@ -134,6 +134,29 @@ class TestMedia(unittest.TestCase):
         self.assertEqual(len(exs), 40)
         self.assertTrue(all(e.questions for e in exs))
 
+    def test_find_overlap(self):
+        from decisiontune.dataset import find_overlap
+
+        def ex(state, src):
+            return parse_example({
+                "state": state,
+                "questions": [{"id": "q", "type": "noul", "question": "Q?"}],
+                "answers": {"q": "yes"},
+            }, src)
+
+        train = [ex("The customer was charged twice for invoice 4821 yesterday", "t:1"),
+                 ex("How do I reset my password for the dashboard", "t:2")]
+        ev = [ex("The customer was charged twice for invoice 4821 today", "e:1"),
+              ex("Completely unrelated question about shipping times here", "e:2")]
+        dup = find_overlap(train, ev)
+        self.assertEqual(len(dup), 1)
+        self.assertEqual(dup[0]["eval"], "e:1")
+        self.assertEqual(dup[0]["train"], "t:1")
+        self.assertGreaterEqual(dup[0]["similarity"], 0.8)
+        # unrelated eval example and empty inputs -> no flags
+        self.assertEqual(find_overlap(train, [ev[1]]), [])
+        self.assertEqual(find_overlap([], []), [])
+
 
 if __name__ == "__main__":
     unittest.main()

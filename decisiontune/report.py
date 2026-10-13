@@ -1,6 +1,8 @@
 """Eval report rendering: text (terminal), Markdown, and a premium static HTML page."""
 from __future__ import annotations
 
+import html as _html
+
 from .evaluate import EvalReport
 
 HTML_CSS = """
@@ -70,6 +72,19 @@ def to_text(r: EvalReport, tuned_name: str = "tuned", base_name: str = "baseline
             tv, bv = t["latency_ms"][k], b["latency_ms"][k]
         L.append(f"{label:<22}{tv:>10.3f}{bv:>10.3f}{tv - bv:>+10.3f}")
     L += ["", f"tuned-vs-baseline agreement: {r.agreement:.1%}", ""]
+    delta = t["accuracy"] - b["accuracy"]
+    lo, hi = r.delta_ci
+    L.append(f"accuracy delta: {delta:+.1%}  (paired bootstrap 95% CI: {lo:+.1%} to {hi:+.1%})")
+    ds = r.delta_summary
+    L.append(f"per-question: {ds.get('fixed', 0)} fixed, {ds.get('regressed', 0)} regressed, "
+             f"{ds.get('still_correct', 0)} still right, {ds.get('still_wrong', 0)} still wrong")
+    regs = [d for d in r.deltas if d["verdict"] == "regressed"][:5]
+    if regs:
+        L.append("top regressions (tuning broke these):")
+        for d in regs:
+            L.append(f"  {d['source']} {d['qid']}: truth={d['truth']} "
+                     f"baseline={d['baseline_pred']} ({d['baseline_conf']:.0%}) -> "
+                     f"tuned={d['tuned_pred']} ({d['tuned_conf']:.0%})")
     L.append("per question type:")
     for qtype, m in r.per_type.items():
         L.append(f"  {qtype}: tuned acc {m['tuned']['accuracy']:.1%} "
@@ -96,6 +111,21 @@ def to_markdown(r: EvalReport, tuned_name: str = "tuned", base_name: str = "base
     L.append(f"| latency p95 | {t['latency_ms']['p95']:.1f} ms | {b['latency_ms']['p95']:.1f} ms | "
              f"{t['latency_ms']['p95'] - b['latency_ms']['p95']:+.1f} ms |")
     L += ["", f"Tuned-vs-baseline agreement: **{r.agreement:.1%}**", ""]
+    delta = t["accuracy"] - b["accuracy"]
+    lo, hi = r.delta_ci
+    L.append(f"Accuracy delta: **{delta:+.1%}** (paired bootstrap 95% CI: {lo:+.1%} to {hi:+.1%})")
+    ds = r.delta_summary
+    L.append(f"Per-question: **{ds.get('fixed', 0)}** fixed, **{ds.get('regressed', 0)}** regressed, "
+             f"{ds.get('still_correct', 0)} still right, {ds.get('still_wrong', 0)} still wrong")
+    regs = [d for d in r.deltas if d["verdict"] == "regressed"][:5]
+    if regs:
+        L += ["", "Top regressions (tuning broke these):", "",
+              "| example | question | truth | baseline | tuned |",
+              "|---|---|---|---|---|"]
+        for d in regs:
+            L.append(f"| {d['source']} | {d['qid']} | {d['truth']} | "
+                     f"{d['baseline_pred']} ({d['baseline_conf']:.0%}) | "
+                     f"{d['tuned_pred']} ({d['tuned_conf']:.0%}) |")
     return "\n".join(L)
 
 
@@ -123,6 +153,31 @@ def to_html(r: EvalReport, tuned_name: str = "tuned", base_name: str = "baseline
         f"<td class=num>{m['tuned']['n']} / {m['baseline']['n']}</td></tr>"
         for qt, m in r.per_type.items()
     )
+    ds = r.delta_summary
+    delta = t["accuracy"] - b["accuracy"]
+    lo, hi = r.delta_ci
+    change_cards = (
+        f"<div class=card><div class=k>Fixed by tuning</div><div class=v>{ds.get('fixed', 0)}</div></div>"
+        f"<div class=card><div class=k>Regressed by tuning</div><div class=v>{ds.get('regressed', 0)}</div></div>"
+        f"<div class=card><div class=k>Accuracy delta (95% CI)</div>"
+        f"<div class=v>{delta:+.1%}<small> {lo:+.1%} to {hi:+.1%}</small></div></div>"
+    )
+    regs = [d for d in r.deltas if d["verdict"] == "regressed"][:5]
+    if regs:
+        reg_rows = "".join(
+            f"<tr><td>{_html.escape(str(d['source']))}</td><td>{_html.escape(str(d['qid']))}</td>"
+            f"<td>{_html.escape(str(d['truth']))}</td>"
+            f"<td class=num>{_html.escape(str(d['baseline_pred']))} ({d['baseline_conf']:.0%})</td>"
+            f"<td class=num>{_html.escape(str(d['tuned_pred']))} ({d['tuned_conf']:.0%})</td></tr>"
+            for d in regs
+        )
+        reg_section = ("<h2>Regressions — tuning broke these</h2>"
+                       "<table><tr><th>Example</th><th>Question</th><th>Truth</th>"
+                       "<th class=num>Baseline</th><th class=num>Tuned</th></tr>"
+                       f"{reg_rows}</table>")
+    else:
+        reg_section = ("<div class=note>No regressions — tuning didn't break anything "
+                       "the baseline got right.</div>")
     verdict = ("The tuned model beats the baseline on accuracy."
                if t["accuracy"] > b["accuracy"]
                else "The tuned model does not beat the baseline on accuracy — "
@@ -139,6 +194,9 @@ tuned <b>{tuned_name}</b> vs baseline <b>{base_name}</b></p>
 <table><tr><th>Metric</th><th class=num>Tuned</th><th class=num>Baseline</th><th class=num>Delta</th></tr>{rows}</table>
 <h2>By question type</h2>
 <table><tr><th>Type</th><th class=num>Tuned acc</th><th class=num>Baseline acc</th><th class=num>n (tuned/base)</th></tr>{type_rows}</table>
+<h2>What changed</h2>
+<div class=grid>{change_cards}</div>
+{reg_section}
 <div class=note>{verdict} Agreement between the two is {r.agreement:.1%} —
 high agreement with higher tuned accuracy means the fine-tune kept the base
 behavior and fixed its mistakes.</div>

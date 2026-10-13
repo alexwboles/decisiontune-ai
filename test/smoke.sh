@@ -64,10 +64,25 @@ $CLI eval --data /tmp/dt-e2e/eval.jsonl \
   --tuned-name tuned-mock --baseline-name baseline-mock \
   --markdown-out /tmp/dt-e2e/report.md --html-out /tmp/dt-e2e/report.html \
   > /tmp/dt-eval.txt 2>&1 \
-  && grep -q "agreement" /tmp/dt-eval.txt && ok "eval report text" || bad "eval report text"
-grep -q "| metric |" /tmp/dt-e2e/report.md && ok "eval report markdown" || bad "eval report markdown"
-grep -q "eval report" /tmp/dt-e2e/report.html && ! grep -q "border-radius" /tmp/dt-e2e/report.html \
-  && ok "eval report html (sharp edges)" || bad "eval report html"
+  && grep -q "agreement" /tmp/dt-eval.txt && grep -q "95% CI" /tmp/dt-eval.txt \
+  && grep -q "fixed" /tmp/dt-eval.txt && ok "eval report text (deltas + CI)" || bad "eval report text"
+grep -q "| metric |" /tmp/dt-e2e/report.md && grep -q "Accuracy delta" /tmp/dt-e2e/report.md \
+  && ok "eval report markdown (delta section)" || bad "eval report markdown"
+grep -q "eval report" /tmp/dt-e2e/report.html && grep -q "What changed" /tmp/dt-e2e/report.html \
+  && ! grep -q "border-radius" /tmp/dt-e2e/report.html \
+  && ok "eval report html (what-changed, sharp edges)" || bad "eval report html"
+
+# split warns when eval examples near-duplicate train examples (leakage check)
+python3 -c "
+import json
+row = {'state': 'The customer was charged twice for invoice 4821',
+       'questions': [{'id': 'q', 'type': 'noul', 'question': 'Q?'}], 'answers': {'q': 'yes'}}
+open('/tmp/dt-dup.jsonl', 'w').write(json.dumps(row) + chr(10) + json.dumps(row) + chr(10))
+"
+$CLI split /tmp/dt-dup.jsonl --train-out /tmp/dt-e2e/dtrain.jsonl \
+  --eval-out /tmp/dt-e2e/deval.jsonl --eval-fraction 0.5 --seed 0 \
+  > /tmp/dt-splitdup.log 2>&1
+grep -q "WARNING" /tmp/dt-splitdup.log && ok "split warns on train/eval overlap" || bad "split warns on train/eval overlap"
 
 kill $TUNED_PID $BASE_PID 2>/dev/null || true
 trap - EXIT
